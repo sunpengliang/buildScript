@@ -25,9 +25,6 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 
-# set the mount path
-MountDisk=/home/opt
-
 # Curious on why this script is so complicated when it is just downloading stuff and
 # configuring erigon?
 #
@@ -263,34 +260,34 @@ function install_erigon() {
 function prepare_zfs_datasets() {
   set -euxo pipefail
   # Create datasets if needed.
-  zfs create -o mountpoint=$MOUNTPATH/erigon/data tank/erigon_data || true
-  zfs create -o mountpoint=$MOUNTPATH/erigon/data/eth tank/erigon_data/eth || true
+  zfs create -o mountpoint=/erigon/data tank/erigon_data || true
+  zfs create -o mountpoint=/erigon/data/eth tank/erigon_data/eth || true
 }
 
 function download_snapshots() {
   set -euxo pipefail
   if ! zfs list tank/erigon_data/eth/snapshots ; then
     # Setup zfs dataset and download the latest erigon snapshots into it if needed.
-    zfs create -o mountpoint=$MOUNTPATH/erigon/data/eth/snapshots tank/erigon_data/eth/snapshots
+    zfs create -o mountpoint=/erigon/data/eth/snapshots tank/erigon_data/eth/snapshots
   fi
-  mkdir -p $MOUNTPATH/erigon/data/eth/snapshots/
+  mkdir -p /erigon/data/eth/snapshots/
 
-  parallel_sync_download s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/snapshots/ $MOUNTPATH/erigon/data/eth/snapshots/
+  parallel_sync_download s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/snapshots/ /erigon/data/eth/snapshots/
 
   # We then need to touch each .idx file. This is because erigon needs each .idx file to have an
   # mtime greater than the .seq file.
-  find $MOUNTPATH/erigon/data/eth/snapshots/ -type f -name "*.idx" -exec touch {} \;
+  find /erigon/data/eth/snapshots/ -type f -name "*.idx" -exec touch {} \;
 }
 
 # This is not strictly required, but it will make it much faster for a node to join the pool.
 function download_nodes() {
   set -euxo pipefail
   if ! zfs list tank/erigon_data/eth/nodes ; then
-    zfs create -o mountpoint=$MOUNTPATH/erigon/data/eth/nodes tank/erigon_data/eth/nodes
+    zfs create -o mountpoint=/erigon/data/eth/nodes tank/erigon_data/eth/nodes
   fi
 
   # This command is allowed to fail.
-  parallel_sync_download s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/nodes/ $MOUNTPATH/erigon/data/eth/nodes/nodes/ || true
+  parallel_sync_download s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/nodes/ /erigon/data/eth/nodes/nodes/ || true
 }
 
 # This complicated bit of code accomplishes 2 goals.
@@ -303,15 +300,15 @@ function download_nodes() {
 function download_database_file() {
   set -euxo pipefail
   if ! zfs list tank/erigon_data/eth/chaindata ; then
-    zfs create -o mountpoint=$MOUNTPATH/erigon/data/eth/chaindata tank/erigon_data/eth/chaindata
+    zfs create -o mountpoint=/erigon/data/eth/chaindata tank/erigon_data/eth/chaindata
   fi
 
   # Remove the file if it exists.
-  rm -rf $MOUNTPATH/erigon/data/eth/chaindata/mdbx.dat || true
+  rm -rf /erigon/data/eth/chaindata/mdbx.dat || true
 
   s3pcp --requester-pays s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/chaindata/mdbx.dat.zstd \
     | pv \
-    | pzstd -p $(nproc) -q -d -f -o $MOUNTPATH/erigon/data/eth/chaindata/mdbx.dat
+    | pzstd -p $(nproc) -q -d -f -o /erigon/data/eth/chaindata/mdbx.dat
 }
 
 function prepare_erigon() {
@@ -320,7 +317,7 @@ function prepare_erigon() {
   # Create erigon user if needed.
   useradd erigon || true
 
-  chown -R erigon:erigon $MOUNTPATH/erigon/data/
+  chown -R erigon:erigon /erigon/data/
 
   # Stop the service if it exists.
   systemctl stop erigon-eth || true
@@ -334,7 +331,7 @@ Type=simple
 Restart=always
 RestartSec=1
 User=erigon
-ExecStart=$MOUNTPATH/erigon/start_erigon_service.sh
+ExecStart=/erigon/start_erigon_service.sh
 
 [Install]
 WantedBy=multi-user.target
@@ -365,7 +362,7 @@ sh -c '
 EOT
   fi
 
-  echo "exec erigon --snapshots=true --datadir=$MOUNTPATH/erigon/data/eth --txpool.disable" >> /erigon/start_erigon_service.sh
+  echo "exec erigon --snapshots=true --datadir=/erigon/data/eth --txpool.disable" >> /erigon/start_erigon_service.sh
 
   if [[ "${SHOULD_AUTO_UPLOAD_SNAPSHOT:-}" == "1" ]]; then
     # Run in background because we want to make the non `SHOULD_AUTO_UPLOAD_SNAPSHOT` path pretty but keep
@@ -429,11 +426,11 @@ function upload_mdbx_file() {
     parallel_downloads=$max_parallel_downloads
   fi
 
-  mkdir -p $MOUNTPATH/erigon_upload_tmp
-  mount -t tmpfs -o rw,size=$(( parallel_downloads * bytes_per_chunk + 1024 * 1024 )) tmpfs $MOUNTPATH/erigon_upload_tmp
-  trap "umount $MOUNTPATH/erigon_upload_tmp" EXIT
-  mkdir -p $MOUNTPATH/erigon_upload_tmp/working_stdout
-  mkdir -p $MOUNTPATH/erigon_upload_tmp/upload_part_results
+  mkdir -p /erigon_upload_tmp
+  mount -t tmpfs -o rw,size=$(( parallel_downloads * bytes_per_chunk + 1024 * 1024 )) tmpfs /erigon_upload_tmp
+  trap "umount /erigon_upload_tmp" EXIT
+  mkdir -p /erigon_upload_tmp/working_stdout
+  mkdir -p /erigon_upload_tmp/upload_part_results
 
   # Sadly s3api/boto3 does not support streaming file descriptors. This means we need to write
   # our entire chunk to a file then upload that file. This probably isn't a big deal since the
@@ -443,28 +440,28 @@ function upload_mdbx_file() {
       -3 \
       -v \
       --stdout \
-      $MOUNTPATH/erigon/data/eth/chaindata/mdbx.dat \
+      /erigon/data/eth/chaindata/mdbx.dat \
     | psplit \
       -b $bytes_per_chunk \
       "bash -euo pipefail -c ' \
          SEQ=\$(( \$SEQ + 1 )) && \
-         md5_value=\$(tee $MOUNTPATH/erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ) | md5sum | cut -c -32) && \
-         trap \"rm -rf $MOUNTPATH/erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ)\" EXIT && \
+         md5_value=\$(tee /erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ) | md5sum | cut -c -32) && \
+         trap \"rm -rf /erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ)\" EXIT && \
          etag_result=\$(aws s3api upload-part \
-            --body $MOUNTPATH/erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ) \
+            --body /erigon_upload_tmp/working_stdout/\$(printf %05d \$SEQ) \
             --request-payer requester \
             --bucket public-blockchain-snapshots \
             --key eth/erigon/archive/latest/v1/chaindata/mdbx.dat.zstd \
             --upload-id $upload_id \
             --part-number \$SEQ \
-        | jq -r .ETag | tr -d \\\" | tee > $MOUNTPATH/erigon_upload_tmp/upload_part_results/\$(printf %05d \$SEQ)') && \
+        | jq -r .ETag | tr -d \\\" | tee > /erigon_upload_tmp/upload_part_results/\$(printf %05d \$SEQ)') && \
         if [ \$md5_value -ne \$etag_result ]; then echo \"md5 did not match \$md5_value -ne \$etag_result\" >&2 ; exit 1; fi"
 
   # Sadly `aws s3api complete-multipart-upload` requires the `multipart-upload` field be sent as an
   # argument which is too large to send over an argument, so we use a short python script to finish.
   python3 -c "
 import boto3, os
-part_nums=os.listdir('$MOUNTPATH/erigon_upload_tmp/upload_part_results/')
+part_nums=os.listdir('/erigon_upload_tmp/upload_part_results/')
 part_nums.sort()
 boto3.client('s3').complete_multipart_upload(
     Bucket='public-blockchain-snapshots',
@@ -472,7 +469,7 @@ boto3.client('s3').complete_multipart_upload(
     UploadId='$upload_id',
     RequestPayer='requester',
     MultipartUpload={
-        'Parts': [{'PartNumber': int(name), 'ETag': open('$MOUNTPATH/erigon_upload_tmp/upload_part_results/' + name).readline().strip()} for name in part_nums]
+        'Parts': [{'PartNumber': int(name), 'ETag': open('/erigon_upload_tmp/upload_part_results/' + name).readline().strip()} for name in part_nums]
     }
 )"
 }
@@ -525,10 +522,10 @@ function parallel_sync_upload() {
 }
 
 zfs set readonly=on tank/erigon_data/eth/snapshots
-parallel_sync_upload $MOUNTPATH/erigon/data/eth/snapshots/ s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/snapshots/ &
+parallel_sync_upload /erigon/data/eth/snapshots/ s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/snapshots/ &
 
 zfs set readonly=on tank/erigon_data/eth/nodes
-parallel_sync_upload $MOUNTPATH/erigon/data/eth/nodes/ s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/nodes/ &
+parallel_sync_upload /erigon/data/eth/nodes/ s3://public-blockchain-snapshots/eth/erigon/archive/latest/v1/nodes/ &
 
 zfs set readonly=on tank/erigon_data/eth/chaindata
 upload_mdbx_file &
