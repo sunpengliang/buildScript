@@ -26,7 +26,7 @@ fi
 
 
 # set the mount path
-MountDisk=/home/opt
+MOUNTPATH=/home/opt
 
 # Curious on why this script is so complicated when it is just downloading stuff and
 # configuring erigon?
